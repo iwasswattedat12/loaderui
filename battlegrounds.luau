@@ -40,6 +40,14 @@ local FaceTargetEnabled = false
 local TargetPlayerName = "None"
 local SpectatingTarget = false
 
+-- Techs / Japan's Dash
+local JapansDashEnabled = false
+local JapansDashDuration = 0.5
+local JapansDashFloatOffset = -2
+local JapansDashRotationSpeed = 180 -- degrees per second
+local JapansDashDirection = "Left" -- "Left" or "Right"
+local isJapansDashing = false
+
 -- Movement
 local WalkSpeedEnabled = false
 local CustomWalkSpeed = 16
@@ -181,6 +189,107 @@ local function teleportToPlayer(plrName, behind)
         })
     end
 end
+
+----------------------------------------------------------------------
+-- TECHS: JAPAN'S DASH
+----------------------------------------------------------------------
+local function getClosestEnemyPlayer()
+    local myHrp = getRootPart()
+    if not myHrp then return nil end
+    local closestPlr = nil
+    local minDist = math.huge
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character then
+            local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
+            local hum = plr.Character:FindFirstChild("Humanoid")
+            if hrp and hum and hum.Health > 0 then
+                local dist = (hrp.Position - myHrp.Position).Magnitude
+                if dist < minDist then
+                    minDist = dist
+                    closestPlr = plr
+                end
+            end
+        end
+    end
+    return closestPlr
+end
+
+local function triggerJapansDash()
+    if not JapansDashEnabled or isJapansDashing then return end
+    local hrp = getRootPart()
+    if not hrp then return end
+
+    isJapansDashing = true
+
+    -- 1. Press Q (Dash in TSB)
+    pcall(function()
+        local vim = game:GetService("VirtualInputManager")
+        vim:SendKeyEvent(true, Enum.KeyCode.Q, false, game)
+        task.wait(0.04)
+        vim:SendKeyEvent(false, Enum.KeyCode.Q, false, game)
+    end)
+
+    -- 2. Target & float directly under closest player's Y cframe
+    local targetPlr = getClosestEnemyPlayer()
+    local targetHrp = targetPlr and targetPlr.Character and targetPlr.Character:FindFirstChild("HumanoidRootPart")
+
+    local floatBV = Instance.new("BodyVelocity")
+    floatBV.MaxForce = Vector3.new(0, 1e5, 0)
+    floatBV.Velocity = Vector3.zero
+    floatBV.Parent = hrp
+
+    local startTime = os.clock()
+    local dirMultiplier = (JapansDashDirection == "Left") and 1 or -1
+    local conn
+    conn = RunService.RenderStepped:Connect(function(dt)
+        local elapsed = os.clock() - startTime
+        if elapsed >= JapansDashDuration or not JapansDashEnabled or not hrp or not hrp.Parent then
+            if conn then conn:Disconnect() end
+            if floatBV then floatBV:Destroy() end
+            isJapansDashing = false
+            return
+        end
+
+        local rotDelta = math.rad(JapansDashRotationSpeed * dt * dirMultiplier)
+        local currentRot = hrp.CFrame - hrp.Position
+        local newRot = currentRot * CFrame.Angles(0, rotDelta, 0)
+
+        if targetHrp and targetHrp.Parent then
+            local targetY = targetHrp.Position.Y + JapansDashFloatOffset
+            hrp.CFrame = CFrame.new(hrp.Position.X, targetY, hrp.Position.Z) * newRot
+        else
+            hrp.CFrame = CFrame.new(hrp.Position) * newRot
+        end
+
+        hrp.AssemblyLinearVelocity = Vector3.new(hrp.AssemblyLinearVelocity.X, 0, hrp.AssemblyLinearVelocity.Z)
+    end)
+end
+
+-- Hook Remote: workspace.Live[...].Communicate:FireServer({ Goal = "LeftClickRelease" })
+pcall(function()
+    if hookmetamethod then
+        local oldNamecall
+        oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+            local method = getnamecallmethod()
+            local args = {...}
+            if method == "FireServer" and self.Name == "Communicate" and JapansDashEnabled then
+                if type(args[1]) == "table" and args[1].Goal == "LeftClickRelease" then
+                    task.spawn(triggerJapansDash)
+                end
+            end
+            return oldNamecall(self, ...)
+        end)
+    end
+end)
+
+-- Fallback for executors without metamethod hooking:
+UserInputService.InputEnded:Connect(function(input, gpe)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 and JapansDashEnabled then
+        if not isJapansDashing then
+            task.spawn(triggerJapansDash)
+        end
+    end
+end)
 
 ----------------------------------------------------------------------
 -- MOVEMENT SYSTEMS
@@ -543,7 +652,12 @@ local function saveConfig(name)
         PlayerEspDistance = PlayerEspDistance,
         PlayerEspHealth = PlayerEspHealth,
         MaxEspDistance = MaxEspDistance,
-        AntiAfkEnabled = AntiAfkEnabled
+        AntiAfkEnabled = AntiAfkEnabled,
+        JapansDashEnabled = JapansDashEnabled,
+        JapansDashDuration = JapansDashDuration,
+        JapansDashFloatOffset = JapansDashFloatOffset,
+        JapansDashRotationSpeed = JapansDashRotationSpeed,
+        JapansDashDirection = JapansDashDirection
     }
 
     local encoded = HttpService:JSONEncode(data)
@@ -589,6 +703,11 @@ local function loadConfig(name)
     if data.PlayerEspEnabled ~= nil and UI_Elements.PlayerEspToggle then UI_Elements.PlayerEspToggle:Set(data.PlayerEspEnabled) end
     if data.PlayerEspHighlight ~= nil and UI_Elements.PlayerEspHighlightToggle then UI_Elements.PlayerEspHighlightToggle:Set(data.PlayerEspHighlight) end
     if data.MaxEspDistance and UI_Elements.MaxEspDistanceSlider then UI_Elements.MaxEspDistanceSlider:Set(data.MaxEspDistance) end
+    if data.JapansDashEnabled ~= nil and UI_Elements.JapansDashToggle then UI_Elements.JapansDashToggle:Set(data.JapansDashEnabled) end
+    if data.JapansDashDuration and UI_Elements.JapansDashDurationSlider then UI_Elements.JapansDashDurationSlider:Set(data.JapansDashDuration) end
+    if data.JapansDashFloatOffset and UI_Elements.JapansDashFloatOffsetSlider then UI_Elements.JapansDashFloatOffsetSlider:Set(data.JapansDashFloatOffset) end
+    if data.JapansDashRotationSpeed and UI_Elements.JapansDashRotSpeedSlider then UI_Elements.JapansDashRotSpeedSlider:Set(data.JapansDashRotationSpeed) end
+    if data.JapansDashDirection and UI_Elements.JapansDashDirectionDropdown then UI_Elements.JapansDashDirectionDropdown:Set(data.JapansDashDirection) end
 
     Library:Notify({ Title = "Config", Content = "Loaded config: " .. name, Duration = 2.5 })
 end
@@ -678,6 +797,77 @@ UI_Elements.SpectateToggle = TargetSection:CreateToggle({
             if hum then Camera.CameraSubject = hum end
         end
     end
+})
+
+-- Techs Tab
+local TechsTab = Window:CreateTab("Techs")
+
+local JapansDashSection = TechsTab:CreateSection("Japan's Dash", "Left")
+
+UI_Elements.JapansDashToggle = JapansDashSection:CreateToggle({
+    Name = "Enable Japan's Dash",
+    Default = false,
+    Callback = function(v)
+        JapansDashEnabled = v
+    end
+})
+
+UI_Elements.JapansDashDurationSlider = JapansDashSection:CreateSlider({
+    Name = "Dash Duration",
+    Min = 0.1,
+    Max = 1.5,
+    Default = 0.5,
+    Precision = 2,
+    Suffix = "s",
+    Callback = function(v)
+        JapansDashDuration = v
+    end
+})
+
+UI_Elements.JapansDashFloatOffsetSlider = JapansDashSection:CreateSlider({
+    Name = "Float Under Y Offset",
+    Min = -8,
+    Max = 2,
+    Default = -2,
+    Precision = 1,
+    Suffix = " studs",
+    Callback = function(v)
+        JapansDashFloatOffset = v
+    end
+})
+
+UI_Elements.JapansDashRotSpeedSlider = JapansDashSection:CreateSlider({
+    Name = "Rotation Speed",
+    Min = 60,
+    Max = 720,
+    Default = 180,
+    Suffix = "°/s",
+    Callback = function(v)
+        JapansDashRotationSpeed = v
+    end
+})
+
+UI_Elements.JapansDashDirectionDropdown = JapansDashSection:CreateDropdown({
+    Name = "Rotation Direction",
+    Options = { "Left", "Right" },
+    Default = "Left",
+    Callback = function(v)
+        JapansDashDirection = v
+    end
+})
+
+JapansDashSection:CreateButton({
+    Name = "Test Japan's Dash Now",
+    Callback = function()
+        task.spawn(triggerJapansDash)
+    end
+})
+
+local TechInfoSection = TechsTab:CreateSection("Tech Information", "Right")
+
+TechInfoSection:CreateParagraph({
+    Title = "Japan's Dash Tech",
+    Content = "Automatically listens for 'LeftClickRelease' remote.\n\n• Presses Q to initiate dash.\n• Floats directly under closest player's Y CFrame.\n• Rotates body 180°/s to the left to bypass blocks."
 })
 
 -- Movement Tab
@@ -774,19 +964,6 @@ UI_Elements.FlySpeedSlider = FlySection:CreateSlider({
     end
 })
 
-FlySection:CreateKeybind({
-    Name = "Fly Keybind",
-    Default = Enum.KeyCode.F,
-    Callback = function()
-        FlyEnabled = not FlyEnabled
-        UI_Elements.FlyToggle:Set(FlyEnabled)
-        if FlyEnabled then
-            startFly()
-        else
-            stopFly()
-        end
-    end
-})
 
 -- Visuals Tab
 local VisualsTab = Window:CreateTab("Visuals")
